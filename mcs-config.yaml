@@ -1,1 +1,9 @@
 java_version: "19"
+server_path: "/etc/minecraft"
+jar_url: "https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/20/downloads/paper-1.20.1-20.jar"
+
+icon_url: "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fih1.redbubble.net%2Fimage.441548384.5893%2Fflat%2C750x%2C075%2Cf-pad%2C750x1000%2Cf8f8f8.jpg&f=1&nofb=1&ipt=6b4929b49f87b2c93170296084dc1640ff0bf0f018c4279f11e3413248594c29&ipo=images"
+properties:
+  difficulty: "hard"
+  motd:
+    "This server was created using mcs at (`https://github.com/julian428/mcs`)"
