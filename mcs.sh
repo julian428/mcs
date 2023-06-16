@@ -2,114 +2,231 @@
 
 
 if [[ $EUID -ne 0 ]]; then
-    echo -e "\e[31;1mThis script requires root privileges. Please run with sudo.\e[0m"
+    echo -e "\e[31;1mThis script requires root privileges. Please run with \`sudo\`.\e[0m"
     exit 1
 fi
 
-clear
+config_file=mcs.yaml
+server_path=$(awk '/^main:/ { p=1; next } p && /server_path:/ { print $2; exit }' "$config_file")
 
-config_file="mcs-config.yaml"
+# ? updates the server.properties file in the server directory
+function update_properties {
+  properties_array=()
 
-if [ ! -f "$config_file" ] || [ ! -s "$config_file" ]; then
-    echo "Config file '$config_file' is empty or non-existing. Exiting..."
-    exit 1
-fi
+  # Extract properties section from the YAML file
+  properties_section=$(awk '/^properties:$/,/^$/' "$config_file")
 
-# ?function `parse_yaml` by `https://stackoverflow.com/users/1792684/stefan-farestam`
-function parse_yaml {
-   local prefix=$2
-   local s='[[:space:]]*' w='[a-zA-Z0-9_]*' fs=$(echo @|tr @ '\034')
-   sed -ne "s|^\($s\):|\1|" \
-        -e "s|^\($s\)\($w\)$s:$s[\"']\(.*\)[\"']$s\$|\1$fs\2$fs\3|p" \
-        -e "s|^\($s\)\($w\)$s:$s\(.*\)$s\$|\1$fs\2$fs\3|p"  $1 |
-   awk -F$fs '{
-      indent = length($1)/2;
-      vname[indent] = $2;
-      for (i in vname) {if (i > indent) {delete vname[i]}}
-      if (length($3) > 0) {
-         vn=""; for (i=0; i<indent; i++) {vn=(vn)(vname[i])("_")}
-         printf("%s%s%s=\"%s\"\n", "'$prefix'",vn, $2, $3);
-      }
-   }'
+  # Read the key-value pairs from the properties section
+  while IFS=':' read -r key value; do
+    # Trim leading/trailing whitespace from the key and value
+    key=$(echo "$key" | awk '{$1=$1};1')
+    value=$(echo "$value" | awk '{$1=$1};1')
+
+    # Skip empty lines and the properties header
+    if [[ -n $key ]] && [[ $key != "properties" ]]; then
+      # Replace underscore (_) with hyphen (-) in the key
+      key=${key//_/-}
+
+      # Append key-value pair to the properties array
+      properties_array+=("$key=$value")
+
+      # Alternatively, if you want to include quotes around the value:
+      # properties_array+=("$key=\"$value\"")
+    fi
+  done <<< "$properties_section"  
+
+  for property in "${properties_array[@]}"; do
+    key="${property%%=*}"
+    value="${property#*=}"
+
+    # Escape special characters in the value
+    value="${value//\\/\\\\}"
+    value="${value//\//\\\/}"
+    value="${value//&/\\&}"
+    value="${value//\'/\\\'}"
+    value="${value//\"/\\\"}"
+    value="${value//\`/\\\`}"
+    value="${value//\*/\\\*}"
+    value="${value//\?/\\\?}"
+    value="${value//\[/\\\[}"
+    value="${value//\]/\\\]}"
+    value="${value//\$/\\\$}"
+
+    # Replace the property value in the file
+    sed -i "s/^\($key=\).*/\1$value/" "$server_path/server.properties"
+  done
+
+  echo -e "\e[32mupdated the \e[32;1mserver.properties\e[0m\e[32m file successfully\e[0m"
+}
+# ? updates the server files
+function update_main {
+  read -rp "update java? (y/n) [default: n] " response
+  response=${response:-"n"}
+
+  if [[ $response =~ ^[Yy]$ ]]; then
+    echo "updating computer..."
+    sudo apt-get update > /dev/null
+    java_version=$(grep 'java_version:' "$config_file" | awk '{print $2}')
+    echo "updating java..."
+    sudo apt-get install openjdk-$java_version-jre-headless > /dev/null
+    echo -e "\e[32mupdated java successfully\e[0m"
+  fi
+
+  read -rp "update server path? (y/n) [default: n] " response
+  response=${response:-"n"}
+
+  if [[ $response =~ ^[Yy]$ ]]; then
+    read -rp "what was the previous path? " response
+    response=${response:-"n"}
+    if [ $response = "n" ]; then
+      exit 1;
+    fi
+    mv $server_path $response
+    echo -e "\e[32mmoved the server to $response\e[0m"
+  fi
+
+  read -rp "update server jar file? (y/n) [default: n] " response
+  response=${response:-"n"}
+
+  if [[ $response =~ ^[Yy]$ ]]; then
+    jar_url=$(grep 'jar_url:' "$config_file" | awk '{print $2}')
+    home_dir=$(pwd)
+    cd $server_path
+    rm server.jar
+    wget "$jar_url" --output-document=server.jar > /dev/null
+    cd $home_dir
+    echo -e "\e[32mupdated the server.jar file\e[0m"
+  fi
+
+  read -rp "update the server icon? (y/n) [default: n] " response
+  response=${response:-"n"}
+
+  if [[ $response =~ ^[Yy]$ ]]; then
+    icon_url=$(grep 'icon_url:' "$config_file" | awk '{print $2}')
+    home_dir=$(pwd)
+    cd $server_path
+    rm "server-icon.png"
+    wget "$icon_url" --output-document=server-icon.png > /dev/null
+    convert server-icon.png -resize 64x64\! server-icon.png
+    cd $home_dir
+    echo -e "\e[32mupdated the server icon\e[0m"
+  fi
 }
 
-eval $(parse_yaml $config_file)
+function start_server {
+  read -rp "what should be the maximum memory? [default: 2048M] " response
+  response=${response:-"2048M"}
+  home_dir=$(pwd)
+  cd $server_path
+  java -Xmx"$response" -Xms1024M -jar server.jar nogui
+}
 
-echo -e "\e[32mimported config\e[0m"
+function remove_server {
+  read -rp "do you want to remove the server? (y/n) [default: n] " response
+  response=${response:-"n"}
 
-#? configurating server
-echo "Starting the server configuration..."
+  if [[ $response =~ ^[Yy]$ ]]; then
+    rm -rf $server_path
+    echo -e "\e[31mremoved the server\e[0m"
+  else
+    echo -e "\e[32mdidn't remove the server\e[0m"
+  fi
+}
 
-apt-get update > /dev/null
-echo -e "\e[32mupdated packages\e[0m"
+function configure_server {
+  echo "updating computer..."
+  sudo apt-get update > /dev/null
+  java_version=$(grep 'java_version:' "$config_file" | awk '{print $2}')
+  echo "updating java..."
+  sudo apt-get install openjdk-$java_version-jre-headless > /dev/null
+  echo -e "\e[32mupdated java successfully\e[0m"
 
-apt-get install openjdk-$java_version-jre > /dev/null
-echo -e "\e[32minstalled java version \e[32;1m$java_version\e[0m"
+  mkdir -p $server_path
 
-mkdir -p "$server_path"
+  touch "$server_path/eula.txt"
+  echo "eula=true" > "$server_path/eula.txt"
+  echo -e "\e[32maccepted the eula agreements\e[0m"
 
-wget "$jar_url" --output-document=server.jar > /dev/null
-mv "server.jar" "$server_path/server.jar"
-echo -e "\e[32mdownloaded the server file\e[0m"
+  jar_url=$(grep 'jar_url:' "$config_file" | awk '{print $2}')
+  home_dir=$(pwd)
+  cd $server_path
+  wget "$jar_url" --output-document=server.jar > /dev/null
+  cd $home_dir
+  echo -e "\e[32mupdated the server.jar file\e[0m"
 
-if [ ! -f "plugins.conf" ]; then
-    touch "plugins.conf"
-    echo -e "\e[32mcreated the plugins.conf file\e[0m"
-fi
+  icon_url=$(grep 'icon_url:' "$config_file" | awk '{print $2}')
+  home_dir=$(pwd)
+  cd $server_path
+  wget "$icon_url" --output-document=server-icon.png > /dev/null
+  convert server-icon.png -resize 64x64\! server-icon.png
+  cd $home_dir
+  echo -e "\e[32mupdated the server icon\e[0m"
 
-if [ -s "plugins.conf" ]; then
-    mapfile -t plugins < plugins.conf
-    mkdir "$server_path/plugins"
-    
-    touch "$server_path/plugins/readme.md"
-    echo "The files are indexed in the order that they where put in the **plugins.conf** file." > readme.md
-    
-    echo "downloading plugins..."
-    for index in "${!plugins[@]}"; do
-        wget "${plugins[$index]}" > /dev/null
-        mv "download" "$server_path/plugins/plugin$index.jar"
-    done
-    echo -e "\e[32mdownloaded plugins\e[0m"
-else
-    echo -e "\e[31mthe \e[31;1mplugins.conf\e[0m\e[31m file is empty\e[0m"
-fi
+  echo "installing server files..."
+  cd $server_path
+  java -Xmx2048M -Xms1024M -jar server.jar nogui > /dev/null &
 
-touch "$server_path/eula.txt"
-echo "eula=true" > "$server_path/eula.txt"
-echo -e "\e[32maccepted the eula agreements\e[0m"
+  #? Save the PID of the Java process
+  java_pid=$!
 
-echo "installing server files..."
-cd $server_path
-java -Xmx2048M -Xms1024M -jar server.jar nogui > /dev/null &
+  #? Wait until the server starts
+  until lsof -i :25565 | grep LISTEN > /dev/null; do
+      sleep 1
+  done
 
-#? Save the PID of the Java process
-java_pid=$!
+  sleep 30
 
-#? Wait until the server starts
-until lsof -i :25565 | grep LISTEN > /dev/null; do
-    sleep 1
+  kill $java_pid
+
+  sleep 30
+  echo -e "\e[32minstallation completed.\e[0m"
+
+  cd $home_dir
+  update_properties
+  cd $server_path
+
+  read -rp "start the server? (y/n) [default: n] " response
+  response=${response:-"n"}
+
+  if [[ $response =~ ^[Yy]$ ]]; then
+    clear
+    java -Xmx2048M -Xms1024M -jar server.jar nogui
+  fi
+}
+
+
+# ? script options
+
+while getopts ":gupsr" opt; do
+  case $opt in
+    g)
+      configure_server
+      ;;
+    u)
+      option="$2"
+      if [ ! -z "$option" ]; then
+        if [ "$option" = "main" ]; then
+          update_main
+        elif [ "$option" = "properties" ]; then
+          update_properties
+        else
+          echo -e "\e[31mUnknown option \e[31;1m$option\e[0m"
+        fi
+      else
+        echo -e "\e[31mNo option provided\e[0m"
+      fi
+      ;;
+    p)
+      echo "adding plugins..."
+      ;;
+    s)
+      start_server
+      ;;
+    r)
+      remove_server
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG"
+      ;;
+  esac
 done
-
-sleep 30
-
-kill $java_pid
-
-sleep 30
-echo -e "\e[32minstallation completed.\e[0m"
-
-sed -i "s/difficulty=easy/difficulty=$properties_difficulty/" "$server_path/server.properties"
-sed -i "s/motd=A Minecraft Server/motd=$properties_motd/" "$server_path/server.properties"
-
-wget "$icon_url" --output-document=server-icon.png > /dev/null
-
-convert server-icon.png -resize 64x64\! server-icon.png
-
-read -rp "start the server? (y/n) [default: n] " response
-response=${response:-"n"}
-
-if [[ $response =~ ^[Yy]$ ]]; then
-   clear
-   java -Xmx2048M -Xms1024M -jar server.jar nogui
-fi
-
-#https://www.curseforge.com/api/v1/mods/31043/files/4586220/download
