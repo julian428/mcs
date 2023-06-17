@@ -114,11 +114,11 @@ function update_main {
 }
 
 function start_server {
-  read -rp "what should be the maximum memory? [default: 2048M] " response
-  response=${response:-"2048M"}
+  max_memory=$(awk '/^main:/ { p=1; next } p && /max_memory:/ { print $2; exit }' "$config_file")
+  min_memory=$(awk '/^main:/ { p=1; next } p && /min_memory:/ { print $2; exit }' "$config_file")
   home_dir=$(pwd)
   cd $server_path
-  java -Xmx"$response" -Xms1024M -jar server.jar nogui
+  java -Xmx"$max_memory" -Xms"$min_memory" -jar server.jar nogui
 }
 
 function remove_server {
@@ -194,6 +194,31 @@ function configure_server {
   fi
 }
 
+function add_plugins {
+  echo "adding plugins..."
+  if [ ! -d "$server_path/plugins" ]; then
+    mkdir -p "$server_path/plugins"
+  fi
+  touch plugins.conf
+  for value in "$@"; do
+    if grep -q "$value" "plugins.conf"; then
+      continue
+    fi
+    echo "$value" >> plugins.conf
+  done
+
+  find "$server_path/plugins" -type f -name "*.jar" -exec rm {} +
+  index=0
+  home_dir=$(pwd)
+  while IFS= read -r value; do
+    cd "$server_path/plugins"
+    wget "$value" --output-document=plugin"$index".jar
+    cd "$home_dir"
+    ((index++))
+  done < "plugins.conf"
+  echo -e "\e[32;1mdownloaded all provided plugins\e[0m"
+}
+
 
 # ? script options
 
@@ -217,7 +242,8 @@ while getopts ":gupsr" opt; do
       fi
       ;;
     p)
-      echo "adding plugins..."
+      shift
+      add_plugins $@
       ;;
     s)
       start_server
